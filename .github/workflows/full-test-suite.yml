@@ -1,0 +1,137 @@
+#
+# SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+# SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
+#
+
+name: Full test suite
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Run full backend test suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: corretto
+          java-version: '25'
+          cache: maven
+
+      - name: Build all modules
+        env:
+          MAVEN_OPTS: -Xmx1024m
+          NODE_OPTIONS: --max_old_space_size=4096
+        run: mvn clean install -T6 -DskipTests -Dpkg.skip=true
+
+      - name: Test modules outside application and DAO
+        env:
+          MAVEN_OPTS: -Xmx1024m
+          NODE_OPTIONS: --max_old_space_size=4096
+          SUREFIRE_JAVA_OPTS: -Xmx1200m -Xss256k -XX:+ExitOnOutOfMemoryError
+        run: mvn test -pl='!application,!dao,!ui-ngx,!msa/js-executor,!msa/web-ui' -T4
+
+      - name: Test JavaScript executor
+        env:
+          MAVEN_OPTS: -Xmx1024m
+          NODE_OPTIONS: --max_old_space_size=4096
+          SUREFIRE_JAVA_OPTS: -Xmx1200m -Xss256k -XX:+ExitOnOutOfMemoryError
+        run: mvn test -pl='msa/js-executor'
+
+      - name: Test DAO
+        env:
+          MAVEN_OPTS: -Xmx1024m
+          NODE_OPTIONS: --max_old_space_size=4096
+          SUREFIRE_JAVA_OPTS: -Xmx1200m -Xss256k -XX:+ExitOnOutOfMemoryError
+        run: mvn test -pl dao -Dparallel=packages -DforkCount=4
+
+      - name: Test application controller tests
+        env: &application-test-env
+          MAVEN_OPTS: -Xmx1024m
+          NODE_OPTIONS: --max_old_space_size=4096
+          SUREFIRE_JAVA_OPTS: -Xmx1200m -Xss256k -XX:+ExitOnOutOfMemoryError
+        run: >-
+          mvn test -pl application
+          -Dtest='!**/nosql/**,org.thingsboard.server.controller.**'
+          -DforkCount=6 -Dparallel=classes
+          -Dsurefire.rerunFailingTestsCount=2 -Dsurefire.failOnFlakeCount=5
+
+      - name: Test application edge tests
+        env: *application-test-env
+        run: >-
+          mvn test -pl application
+          -Dtest='!**/nosql/**,org.thingsboard.server.edge.**'
+          -DforkCount=4 -Dparallel=packages
+          -Dsurefire.rerunFailingTestsCount=2 -Dsurefire.failOnFlakeCount=5
+
+      - name: Test application service tests
+        env: *application-test-env
+        run: >-
+          mvn test -pl application
+          -Dtest='!**/nosql/**,org.thingsboard.server.service.**'
+          -DforkCount=6 -Dparallel=packages
+          -Dsurefire.rerunFailingTestsCount=2 -Dsurefire.failOnFlakeCount=5
+
+      - name: Test application MQTT transport tests
+        env: *application-test-env
+        run: >-
+          mvn test -pl application
+          -Dtest='!**/nosql/**,org.thingsboard.server.transport.mqtt.**'
+          -DforkCount=6 -Dparallel=classes
+          -Dsurefire.rerunFailingTestsCount=2 -Dsurefire.failOnFlakeCount=5
+
+      - name: Test application CoAP transport tests
+        env: *application-test-env
+        run: >-
+          mvn test -pl application
+          -Dtest='!**/nosql/**,org.thingsboard.server.transport.coap.**'
+          -DforkCount=6 -Dparallel=classes
+          -Dsurefire.rerunFailingTestsCount=2 -Dsurefire.failOnFlakeCount=5
+
+      - name: Test application LwM2M transport tests
+        env: *application-test-env
+        run: >-
+          mvn test -pl application
+          -Dtest='!**/nosql/**,org.thingsboard.server.transport.lwm2m.**'
+          -DforkCount=6 -Dparallel=packages
+          -Dsurefire.rerunFailingTestsCount=2 -Dsurefire.failOnFlakeCount=5
+
+      - name: Test application test suites
+        env: *application-test-env
+        run: >-
+          mvn test -pl application
+          -Dtest='**/*TestSuite.java'
+          -DforkCount=4 -Dparallel=classes
+          -Dsurefire.rerunFailingTestsCount=2 -Dsurefire.failOnFlakeCount=5
+
+      - name: Test remaining application tests
+        env: *application-test-env
+        run: |
+          mvn test -pl application -Dtest='
+          !**/nosql/**,
+          !org.thingsboard.server.controller.**,
+          !org.thingsboard.server.edge.**,
+          !org.thingsboard.server.service.**,
+          !org.thingsboard.server.transport.mqtt.**,
+          !org.thingsboard.server.transport.coap.**,
+          !org.thingsboard.server.transport.lwm2m.**,
+          !**/*TestSuite.java
+          ' -DforkCount=6 -Dparallel=packages \
+            -Dsurefire.rerunFailingTestsCount=2 -Dsurefire.failOnFlakeCount=5
